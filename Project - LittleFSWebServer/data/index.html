@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" type="text/css" href="style.css">
+</head>
+
+<body onload="updateData()">
+
+    <!-- Main container holding all content -->
+    <div class="container">
+
+        <!-- Section displaying temperature data -->
+        <div class="data-section">
+
+            <!-- Display current temperature -->
+            <div class="data-item">
+                <label>Current Temperature</label>
+                <span id="temperature"></span>
+            </div>
+
+            <!-- Display current time -->
+            <div class="data-item">
+                <label>Current Time</label>
+                <span id="time"></span>
+            </div>
+
+            <!-- Display temperature graphic in a thermometer format -->
+            <div class="data-item">
+                <label>Temperature Graphic</label>
+                <div id="thermometer" class="thermo-base">
+                    <div id="thermo-fill"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer section displaying personal and sensor details -->
+        <div class="footer">
+            <div>Name: Atta UL Saboor</div>
+            <div>Student ID: 000395780</div>
+            <div id="sensor-id">Sensor ID: </div>
+        </div>
+    </div>
+
+    <!-- JavaScript for functionality -->
+    <script src="script.js"></script>
+
+</body>
+
+</html>

@@ -1,0 +1,193 @@
+// Project_Alarm Clock 
+//
+// This program connects to an NTP server to retrieve the current time and displays it on a TM1637 LED display.
+// It also allows setting an alarm using a button, which then activates an onboard LED.
+//
+// @author Atta UL Saboor
+// 
+
+
+#include <Arduino.h>
+#include <ESP8266WiFi.h>
+#include <NTPClient.h>
+#include <WiFiUdp.h>
+#include <TM1637Display.h>
+#include "wifi.h" // Include your WiFi credentials
+
+// NTP update attempt delay (in milliseconds)
+#define NTP_UPDATE_DELAY 10000
+// Button input pin
+#define PIN_BUTTON D7
+// Display clock pin
+#define DISPLAY_CLK D6
+// Display data I/O pin
+#define DISPLAY_DIO D5
+// Onboard LED pin
+#define LED_BUILTIN 2
+
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "0.ca.pool.ntp.org", -4 * 3600, 60000);
+TM1637Display display(DISPLAY_CLK, DISPLAY_DIO);
+
+int iAlarmHour = 0;
+int iAlarmMinute = 0;
+bool isDisplayingAlarm = false;
+bool isColonOn = false;
+unsigned long lastNTPUpdateAttempt = 0;
+unsigned long lastButtonPressTime = 0;
+unsigned long lastColonToggle = 0;
+unsigned long lastLEDFlash = 0;
+bool isNTPConnected = false;  // Global variable for NTP status
+
+// ***********************************************************
+// Function for display dashes on the TM1637 LED display.
+// ***********************************************************
+void displayDashes() {
+    uint8_t segs[] = {
+        0x40, // Dash segment
+        0x40, 
+        0x40, 
+        0x40  
+    };
+    display.setSegments(segs);
+}
+
+// ***********************************************************************
+// Function for update the LED display with the current time or alarm time.
+// ***********************************************************************
+void updateDisplay() {
+  if (!isNTPConnected) {
+    return;  // Exit if NTP is not connected
+  }
+
+  int iHours = isDisplayingAlarm ? iAlarmHour : timeClient.getHours();
+  int iMinutes = isDisplayingAlarm ? iAlarmMinute : timeClient.getMinutes();
+
+  if (isColonOn) {
+    display.showNumberDecEx(iHours * 100 + iMinutes, 0x40, true);
+  } else {
+    display.showNumberDec(iHours * 100 + iMinutes, true);
+  }
+
+  if (millis() - lastColonToggle >= 500) {
+    isColonOn = !isColonOn;
+    lastColonToggle = millis();
+  }
+}
+
+// *********************************************************************************
+// Function for increment the alarm time based on duration when button is pressed.
+//
+// @param iDuration Time in milliseconds for which the button is pressed
+// *********************************************************************************
+void incrementAlarm(unsigned long iDuration) {
+    if (iDuration > 4000) { // >4 seconds
+        iAlarmHour = (iAlarmHour + 1) % 24;
+    } else if (iDuration > 2500) { // >2.5 seconds
+        iAlarmMinute += 15;
+    } else if (iDuration > 1000) { // >1 second
+        iAlarmMinute += 5;
+    } else { // <1 second
+        iAlarmMinute += 1;
+    }
+
+    if (iAlarmMinute >= 60) {
+        iAlarmHour = (iAlarmHour + 1) % 24;
+        iAlarmMinute -= 60;
+    }
+    // Update display immediately after adjusting
+    isDisplayingAlarm = true;  // Ensure in alarm display mode
+    updateDisplay();
+}
+
+// ***********************************************************
+// Function for handle button presses for setting the alarm.
+// ***********************************************************
+void handleButton() {
+    bool reading = digitalRead(PIN_BUTTON);
+    static bool previousReading = HIGH; // Suppose pull-up configuration
+    static unsigned long buttonPressedTime = 0;
+
+    // Debounce Logic
+    if (reading != previousReading) {
+        delay(50); // crude debounce
+        if (reading == HIGH && previousReading == LOW) { // Rising edge - button released
+            unsigned long iDuration = millis() - buttonPressedTime;
+            if (iDuration > 1000) { // if pressed for more than 1 second
+                incrementAlarm(iDuration);
+            } else {
+                isDisplayingAlarm = !isDisplayingAlarm;  // toggle display mode
+            }
+        } else if (reading == LOW) { // Falling edge - button pressed
+            buttonPressedTime = millis();
+        }
+    } else if (reading == LOW) { // button is still being held down
+        unsigned long iDuration = millis() - buttonPressedTime;
+        if (iDuration > 1000) { // if pressed for more than 1 second
+            incrementAlarm(iDuration);
+            buttonPressedTime += iDuration;  // reset the timer to keep incrementing in steps
+        }
+    }
+
+    previousReading = reading;
+}
+
+// **************************************************************
+// Function for check if the current time matches the alarm time.
+// **************************************************************
+void checkAlarm() {
+  if (iAlarmHour == timeClient.getHours() && iAlarmMinute == timeClient.getMinutes()) {
+    if (millis() - lastLEDFlash >= 500) {
+      digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+      lastLEDFlash = millis();
+    }
+  } else {
+    digitalWrite(LED_BUILTIN, HIGH);
+  }
+}
+
+// ************************************************************************
+void setup() {
+  // Configure the USB serial monitor
+  Serial.begin(115200);
+
+  // Configure digital inputs/outputs using pinMode()
+  pinMode(PIN_BUTTON, INPUT_PULLUP);
+  pinMode(LED_BUILTIN, OUTPUT);
+  display.setBrightness(0x0f);
+
+  displayDashes();  // Display "----" during WiFi and NTP connection attempt
+
+  // Start the WiFi connection
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+  }
+
+  // Begin the NTP client and attempt to get an update
+  timeClient.begin();
+  while (!timeClient.update()) {  
+    delay(1000);  
+    timeClient.forceUpdate();
+  }
+  isNTPConnected = true;  // Update flag
+
+  // Print the startup message
+  Serial.println("Hello, the clock is now started");
+}
+
+// ***********************************************************
+void loop() {
+  if (!timeClient.update()) {
+    if (millis() - lastNTPUpdateAttempt > NTP_UPDATE_DELAY) {
+      timeClient.forceUpdate();
+      lastNTPUpdateAttempt = millis();
+    }
+  }
+
+  updateDisplay();
+  handleButton();
+  checkAlarm();
+  delay(50); // To reduce the loop's frequency slightly
+}
+

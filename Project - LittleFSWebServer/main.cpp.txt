@@ -1,0 +1,171 @@
+// Application Name: LittleFS and Web Server
+//
+// This program: This project wants to use LittleFS, a special storage system for devices with NOR flash memory, 
+// with a web server on the D1's storage. The goal is to store files like HTML, CSS, and JS on this storage and show them through the web server.
+//
+// @Author: Atta UL Saboor
+//
+
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <WiFiUdp.h>
+#include <NTPClient.h>
+#include <LittleFS.h>
+#include "wifi.h" // WiFi credentials
+
+#define BUTTON_PIN D7
+#define MODE_C 0
+#define MODE_F 1
+#define MODE_K 2
+
+// Button states and mode variables
+int buttonState = 0;
+int lastButtonState = 0;
+int mode = MODE_C; // 0 for °C, 1 for °F, 2 for K
+
+OneWire oneWire(D3); 
+DallasTemperature sensors(&oneWire);
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org", -4 * 3600, 60000); 
+ESP8266WebServer server(80);
+
+// ***********************************************************
+// Fetches the unique ID of the temperature sensor.
+//
+// @return String representing the sensor's ID
+// ***********************************************************
+String getSensorID() {
+  DeviceAddress deviceAddress;
+  String sensorID = "";
+  
+  if (sensors.getAddress(deviceAddress, 0)) {
+    for (uint8_t i = 0; i < 8; i++) {
+      if (deviceAddress[i] < 16) sensorID += "0";
+      sensorID += String(deviceAddress[i], HEX);
+    }
+  }
+  return sensorID;
+}
+
+// ***********************************************************
+// Main execution loop
+// ***********************************************************
+void loop() {
+  sensors.requestTemperatures();
+  timeClient.update();
+  server.handleClient();
+}
+
+// ************************************************************
+// Handles root path HTTP requests by sending the main webpage.
+// ************************************************************
+void handleRoot() {
+  File file = LittleFS.open("/index.html", "r");
+  server.sendHeader("Content-Type", "text/html; charset=UTF-8");
+  server.streamFile(file, "text/html");
+  file.close();
+}
+
+// *******************************************************************************
+// Sends temperature data, current time, and unit (°C, °F, or K) as a JSON string.
+// *******************************************************************************
+void sendData() {
+  sensors.requestTemperatures();
+  float tempC = sensors.getTempCByIndex(0);
+  String sensorID = getSensorID();
+
+  buttonState = digitalRead(BUTTON_PIN);
+  // Check for button press
+  if (lastButtonState == HIGH && buttonState == LOW) {
+    mode = (mode + 1) % 3; // Cycle between 0, 1, and 2
+  }
+  lastButtonState = buttonState;
+
+  float displayedTemp;
+  switch(mode) {
+    case 0: // Celsius
+        displayedTemp = tempC;
+        break;
+    case 1: // Fahrenheit
+        displayedTemp = DallasTemperature::toFahrenheit(tempC);
+        break;
+    case 2: // Kelvin
+        displayedTemp = tempC + 273.15;
+        break;
+  }
+  
+  String data = "{ \"sensorID\": \"" + sensorID + "\", \"temperature\": \"" + String(displayedTemp) + "\", \"time\": \"" + timeClient.getFormattedTime() + "\", \"unit\": \"" + (mode == 0 ? "C" : mode == 1 ? "F" : "K") + "\" }";
+  Serial.println(data);
+  server.send(200, "application/json", data);
+}
+
+// ***********************************************************
+// Handles HTTP requests for the JavaScript script.
+// ***********************************************************
+void handleScript() {
+  File file = LittleFS.open("/script.js", "r");
+  server.sendHeader("Content-Type", "application/javascript; charset=UTF-8");
+  server.streamFile(file, "application/javascript");
+  file.close();
+}
+
+// ***********************************************************
+// Handles HTTP requests for the CSS stylesheet.
+// ***********************************************************
+void handleStyle() {
+  File file = LittleFS.open("/style.css", "r");
+  server.sendHeader("Content-Type", "text/css; charset=UTF-8");
+  server.streamFile(file, "text/css");
+  file.close();
+}
+
+// ***********************************************************
+// Handles any not-found HTTP requests by sending a 404 page.
+// ***********************************************************
+void handleNotFound() {
+  File file = LittleFS.open("/404.html", "r");
+  server.streamFile(file, "text/html");
+  file.close();
+}
+
+// ***********************************************************
+// Sends the unique sensor ID as a plain text response.
+// ***********************************************************
+void sendSensorID() {
+  String id = getSensorID();
+  server.send(200, "text/plain", id);
+}
+
+// ***********************************************************
+// Initial setup function
+// ***********************************************************
+void setup() {
+  Serial.begin(115200);
+  WiFi.begin(ssid, password);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting to WiFi...");
+    Serial.println(WiFi.localIP());
+  }
+
+  sensors.begin();
+  timeClient.begin();
+
+  if (!LittleFS.begin()) {
+    Serial.println("An error occurred while mounting LittleFS");
+    return;
+  }
+
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/style.css", HTTP_GET, handleStyle); // Route for style.css
+  server.on("/data", HTTP_GET, sendData);
+  server.on("/sensorID", HTTP_GET, sendSensorID);
+  server.on("/script.js", HTTP_GET, handleScript); // Route for script.js
+  server.onNotFound(handleNotFound);
+  server.begin();
+}

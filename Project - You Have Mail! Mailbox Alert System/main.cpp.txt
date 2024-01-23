@@ -1,0 +1,97 @@
+// Mailbox Alert System
+//
+// This program connects to a WiFi network, updates a ThingSpeak channel when a button is pressed, 
+// and puts the ESP8266 into deep sleep mode to conserve energy. It prints the time and date of 
+// each ThingSpeak update to the serial console and ThingSpeak sends an email..
+//
+// @author Atta UL Saboor
+//
+
+#include <Arduino.h>
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
+#include <ThingSpeak.h>
+#include <WiFiUdp.h>
+#include <NTPClient.h>
+#include <EEPROM.h>
+#include <time.h> // For time and date handling
+#include "WIFI.h" // WiFi credentials
+#include "my_thingspeak_credentials.h" // ThingSpeak credentials
+
+#define TIMEZONE_OFFSET -5 * 3600 // UTC-5 (Eastern Standard Time)
+#define SLEEP_TIME_S 60 // Sleep time in seconds
+
+// Global variables
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "0.ca.pool.ntp.org", TIMEZONE_OFFSET, 60000);
+WiFiClient client;
+
+/**
+ * Prints the current date and time of the ThingSpeak update to the serial console.
+ */
+void printUpdateTime() {
+  time_t rawtime = timeClient.getEpochTime();
+  struct tm * ti = localtime(&rawtime);
+  char dateTimeStr[24];
+  strftime(dateTimeStr, sizeof(dateTimeStr), "%Y-%m-%d %H:%M:%S", ti);
+  Serial.print("\nThingSpeak update at: ");
+  Serial.println(dateTimeStr);
+}
+
+/**
+ * Handles the update to ThingSpeak and manages the last update time.
+ * 
+ * @param lastUpdateTime Reference to the variable holding the last update time.
+ */
+void handleThingSpeakUpdate(long& lastUpdateTime) {
+  ThingSpeak.setField(1, 1);
+  int x = ThingSpeak.writeFields(myChannelNumber, myWriteAPIKey);
+  if(x == 200) {
+    printUpdateTime();
+    lastUpdateTime = timeClient.getEpochTime();
+    EEPROM.put(0, lastUpdateTime);
+    EEPROM.commit();
+  } else {
+    Serial.print("Error updating channel: ");
+    Serial.println(x);
+  }
+}
+
+//**************************************************************************
+void setup() {
+  Serial.begin(115200);
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+  }
+  Serial.println("\nConnected to WiFi");
+
+  ThingSpeak.begin(client);
+  timeClient.begin();
+  while(!timeClient.update()) {
+    timeClient.forceUpdate();
+  }
+
+  EEPROM.begin(512);
+  long lastUpdateTime = 0;
+  EEPROM.get(0, lastUpdateTime);
+  if (lastUpdateTime <= 0) {
+    lastUpdateTime = timeClient.getEpochTime() - SLEEP_TIME_S;
+    EEPROM.put(0, lastUpdateTime);
+    EEPROM.commit();
+  }
+}
+
+//***************************************************************************
+void loop() {
+  timeClient.update();
+  long lastUpdateTime = 0;
+  EEPROM.get(0, lastUpdateTime);
+  if (timeClient.getEpochTime() - lastUpdateTime > SLEEP_TIME_S) {
+    handleThingSpeakUpdate(lastUpdateTime);
+    ESP.deepSleep(10 * 60 * 1000000UL);
+  } else {
+    ESP.deepSleep(10 * 60 * 1000000UL);
+  }
+  delay(100);
+}
